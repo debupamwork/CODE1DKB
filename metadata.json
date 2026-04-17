@@ -1,0 +1,6 @@
+{
+  "name": "NewBuzz",
+  "description": "A high-end, minimalist e-commerce experience for women's fashion, featuring curated collections and a sophisticated editorial design.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": []
+}

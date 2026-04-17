@@ -1,0 +1,133 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: products
+    // Fields: name (string), price (number), category (string), image (string), description (string), stock (number), isNew (bool)
+    //
+    // Collection: orders
+    // Fields: userId (string), items (list), totalAmount (number), status (string), createdAt (timestamp), shippingAddress (map)
+    //
+    // Collection: users
+    // Fields: email (string), name (string), role (string)
+    //
+    // Collection: addresses
+    // Fields: userId (string), name (string), street (string), city (string), state (string), zip (string), country (string), isDefault (bool), createdAt (timestamp)
+    //
+    // ===============================================================
+
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && 
+        ((request.auth.token.email == "debupam.work@gmail.com" && request.auth.token.email_verified == true) ||
+         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'));
+    }
+
+    function isValidProduct(data) {
+      return data.keys().hasAll(['name', 'price', 'category', 'image', 'stock']) &&
+             data.name is string && data.name.size() < 100 &&
+             data.price is number && data.price >= 0 &&
+             data.category is string &&
+             data.image is string &&
+             data.stock is number && data.stock >= 0;
+    }
+
+    function isValidOrder(data) {
+      return data.keys().hasAll(['userId', 'items', 'totalAmount', 'status', 'createdAt']) &&
+             data.userId == request.auth.uid &&
+             data.items is list &&
+             data.totalAmount is number &&
+             data.status in ['pending', 'processing', 'shipped', 'delivered', 'cancelled'] &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['email', 'role']) &&
+             data.email is string &&
+             data.role in ['admin', 'user'];
+    }
+
+    function isValidAddress(data) {
+      return data.keys().hasAll(['userId', 'name', 'phone', 'street', 'city', 'state', 'zip', 'country']) &&
+             data.userId == request.auth.uid &&
+             data.name is string && data.name.size() < 100 &&
+             data.phone is string && data.phone.size() < 20 &&
+             data.street is string && data.street.size() < 200 &&
+             data.city is string && data.city.size() < 100 &&
+             data.state is string && data.state.size() < 100 &&
+             data.zip is string && data.zip.size() < 20 &&
+             data.country is string && data.country.size() < 100;
+    }
+
+    function isValidReview(data) {
+      return data.keys().hasAll(['productId', 'orderId', 'userId', 'userName', 'rating', 'comment', 'createdAt']) &&
+             data.userId == request.auth.uid &&
+             data.rating is number && data.rating >= 1 && data.rating <= 5 &&
+             data.comment is string && data.comment.size() < 1000 &&
+             data.createdAt is timestamp;
+    }
+
+    function isVerifiedBuyer(orderId, productId) {
+      let order = get(/databases/$(database)/documents/orders/$(orderId)).data;
+      return order.userId == request.auth.uid &&
+             order.status == 'delivered';
+      // Note: Full item validation in rules is complex for object lists, 
+      // but we ensure the order belongs to the user and is delivered.
+    }
+
+    // Rules
+    match /products/{productId} {
+      allow read: if true;
+      allow write: if isAdmin() && isValidProduct(request.resource.data);
+    }
+
+    match /reviews/{reviewId} {
+      allow read: if true;
+      allow create: if isAuthenticated() && 
+                    isValidReview(request.resource.data) && 
+                    isVerifiedBuyer(request.resource.data.orderId, request.resource.data.productId);
+      allow update: if isAuthenticated() && isOwner(resource.data.userId) && 
+                    isValidReview(request.resource.data) &&
+                    request.resource.data.productId == resource.data.productId &&
+                    request.resource.data.orderId == resource.data.orderId;
+      allow delete: if isAuthenticated() && (isOwner(resource.data.userId) || isAdmin());
+    }
+
+    match /orders/{orderId} {
+      allow read: if isOwner(resource.data.userId) || isAdmin();
+      allow create: if isAuthenticated() && isValidOrder(request.resource.data);
+      allow update: if isAdmin() || (isOwner(resource.data.userId) && request.resource.data.status == 'cancelled' && resource.data.status == 'pending');
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isAuthenticated() && isOwner(userId) && isValidUser(request.resource.data) && 
+                    (request.resource.data.role == 'user' || isAdmin());
+      allow update: if isAdmin() || (isOwner(userId) && request.resource.data.role == resource.data.role);
+    }
+
+    match /settings/{settingId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /addresses/{addressId} {
+      allow read: if isOwner(resource.data.userId);
+      allow create: if isAuthenticated() && isValidAddress(request.resource.data);
+      allow update: if isOwner(resource.data.userId) && isValidAddress(request.resource.data);
+      allow delete: if isOwner(resource.data.userId);
+    }
+  }
+}
